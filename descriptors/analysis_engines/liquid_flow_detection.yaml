@@ -1,0 +1,8 @@
+ae:
+  name: liquid_flow_detection
+fixedflow:
+  - CollectionReader
+  - ImagePreprocessor
+  - LiquidTracker
+CollectionReader:
+  camera_config_files: ['config_kinect_robot.ini']

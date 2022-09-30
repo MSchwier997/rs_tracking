@@ -56,7 +56,7 @@ public:
         cas.get(VIEW_CAMERA_INFO_HD, camera_info_);
 
         applyRegion();
-        //denseLucasKanade(image_);
+        denseFarneback(image_);
 
         return UIMA_ERR_NONE;
     }
@@ -75,46 +75,50 @@ private:
         tf::StampedTransform gripperToHead;
         cv::Point2f gripper;
 
-        if (rs::TFListenerProxy::listener->frameExists("r_gripper_palm_link")) {
-            listener_.listener->waitForTransform("r_gripper_palm_link", camera_info_.header.frame_id,
-                                                 ros::Time(0),
-                                                 ros::Duration(2.0));
-            listener_.listener->lookupTransform("r_gripper_palm_link", camera_info_.header.frame_id, ros::Time(0),
-                                                gripperToHead);
+        if (rs::TFListenerProxy::listener->frameExists("r_gripper_tool_frame")) {
+            listener_.listener->waitForTransform(camera_info_.header.frame_id, "r_gripper_tool_frame",
+                                                 ros::Time(0),ros::Duration(2.0));
+            listener_.listener->lookupTransform(camera_info_.header.frame_id, "r_gripper_tool_frame",
+                                                ros::Time(0),gripperToHead);
 
+            //Pose from gripper
             cv::Point3f gripperPose = cv::Point3f((float) gripperToHead.getOrigin().getX(), (float) gripperToHead.getOrigin().getY(), (float) gripperToHead.getOrigin().getZ());
             std::vector<cv::Point3f> roiPoints;
             roiPoints.push_back(gripperPose);
-            cv::Mat distortionCoefficients = cv::Mat(1, (int) camera_info_.D.size(), CV_64F);
+
             std::vector<cv::Point2f> pointsImage;
+
+            //cameraMatrix
             cv::Mat cameraMatrix = cv::Mat(3, 3, CV_64F);
+            cameraMatrix.at<double>(0, 0) = camera_info_.K[0];
+            cameraMatrix.at<double>(0, 1) = camera_info_.K[1];
+            cameraMatrix.at<double>(0, 2) = camera_info_.K[2];
+            cameraMatrix.at<double>(1, 0) = camera_info_.K[3];
+            cameraMatrix.at<double>(1, 1) = camera_info_.K[4];
+            cameraMatrix.at<double>(1, 2) = camera_info_.K[5];
+            cameraMatrix.at<double>(2, 0) = camera_info_.K[6];
+            cameraMatrix.at<double>(2, 1) = camera_info_.K[7];
+            cameraMatrix.at<double>(2, 2) = camera_info_.K[8];
+
+            //empty matrix for rvec and tvec
             cv::Mat vec(3, 1, cv::DataType<double>::type); // Rotation vector
             vec.at<double>(0) = 0.0;
             vec.at<double>(1) = 0.0;
             vec.at<double>(2) = 0.0;
-            cv::projectPoints(roiPoints, vec, vec,
-                              cameraMatrix, distortionCoefficients, pointsImage);
 
+            cv::projectPoints(roiPoints, vec, vec,
+                              cameraMatrix, camera_info_.D, pointsImage);
 
             gripper = pointsImage[0];
-            //outInfo((float) gripperToHead.getOrigin().getX());
-            //outInfo((float) gripperToHead.getOrigin().getY());
-            //[1.735442140139042e+238, 2.347269349079779e+251, 8.238772645159547e-67;
-            // 4.437500133906592e-38, 1.723720460929229e-47, 3.170958682177391e+180;
-            // 2.440460595065171e-152, 2.316339904798213e-152, 1.278502225360474e-152]
-//            [1.677918434315618e+243, 9.021338756902148e+217, 1.591352950536471e-76;
-//            6.702880279567067e-177, 6.509443960381337e+252, 1.944135954238013e+233;
-//            9.364104449322752e-76, 6.572753743897687e+16, 4.619647653228141e+281]
 
+            cv::Rect roi((int) gripper.x - 100, (int) gripper.y + 250, 200, 300);
 
-            outInfo(pointsImage[0].x);
-            outInfo(pointsImage[0].y);
-            for (int x = (int) gripper.x - 5; x < (int) gripper.x + 5; x++) {
-                for (int y = (int) gripper.y - 5; y < (int) gripper.y + 5; y++) {
-                        image_.at<cv::Vec3b>(x, y) = cv::Vec3b(255, 0, 255);
-                }
-            }
+            image_ = image_(roi);
+
+        } else {
+            outInfo("gripper frame not found");
         }
+
 
     }
 
@@ -165,9 +169,9 @@ private:
             outInfo("first frame");
         } else {
             cv::Mat flow(lastImage.size(), CV_32FC2);
-            cv::optflow::calcOpticalFlowSparseToDense(oldGray, frameGray, flow, 8, 128, 0.05f, true, 500.0, 1.5f);
+            cv::optflow::calcOpticalFlowSparseToDense(oldGray, frameGray, flow, 8, 128, 0.05f, false, 500.0, 1.5f);
 
-            cv::Mat flow_parts[2];
+            /*cv::Mat flow_parts[2];
             split(flow, flow_parts);
             cv::Mat magnitude, angle, magn_norm;
             cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
@@ -181,7 +185,8 @@ private:
             merge(_hsv, 3, hsv);
             hsv.convertTo(hsv8, CV_8U, 255.0);
             cvtColor(hsv8, bgr, cv::COLOR_HSV2BGR);
-            image_ = bgr.clone();
+            image_ = bgr.clone();*/
+            outInfo(isLiquidFlow(flow));
         }
         lastImage = image_.clone();
         oldGray = frameGray.clone();
@@ -194,7 +199,7 @@ private:
             outInfo("first frame");
         } else {
             cv::Mat flow(lastImage.size(), CV_32FC2);
-            cv::calcOpticalFlowFarneback(oldGray, frameGray, flow, 0.5, 3, 15, 6, 5, 1.2, 0);
+            cv::calcOpticalFlowFarneback(oldGray, frameGray, flow, 0.75, 15, 30, 10, 7, 1.6, 0);
 
             cv::Mat flow_parts[2];
             split(flow, flow_parts);
@@ -211,6 +216,11 @@ private:
             hsv.convertTo(hsv8, CV_8U, 255.0);
             cvtColor(hsv8, bgr, cv::COLOR_HSV2BGR);
             image_ = bgr.clone();
+            if (isLiquidFlow(flow) == 1) {
+                outInfo("FFFFFFFFFFFFFFFFFFLLLLLLLLLLLLLLLOOOOOOOOOOOWWWWWWWWWWWWWWWWWWWW");
+            } else {
+                outInfo("no flow");
+            }
         }
         lastImage = image_.clone();
         oldGray = frameGray.clone();
@@ -223,7 +233,7 @@ private:
         } else {
             cv::Mat flow(lastImage.size(), CV_32FC2);
             cv::optflow::calcOpticalFlowDenseRLOF(lastImage, image_, flow, cv::Ptr<cv::optflow::RLOFOpticalFlowParameter>(),
-                    1.f, cv::Size(6, 6),
+                    0, cv::Size(2, 6),
                     cv::optflow::InterpolationType::INTERP_EPIC, 128, 0.05f, 100.0f,
                     15,100, true, 500.0f, 1.5f, false);
 
@@ -245,6 +255,31 @@ private:
         }
         lastImage = image_.clone();
     }
+
+    bool isLiquidFlow(cv::Mat flow) {
+        cv::Mat flow_parts[2];
+        cv::split(flow, flow_parts);
+        int flowCount;
+
+#pragma omp parallel for
+        for (int x = 0; x <= flow.rows; x++) {
+            for (int y = 0; y <= flow.cols; y++) {
+                if ((flow_parts[1].at<float>(x, y) >= 0.5f || flow_parts[1].at<float>(x, y) <= -0.5f) && flow_parts[0].at<float>(x, y) >= 0.0f) {
+                    flowCount++;
+                } else {
+                    //image_.at<cv::Vec3b>(x, y) = cv::Vec3b(0, 0, 0);
+                }
+
+            }
+        }
+        outInfo(flowCount);
+        if (flowCount > 36000) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
 
 
 
